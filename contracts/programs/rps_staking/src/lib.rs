@@ -1,4 +1,9 @@
 use anchor_lang::prelude::*;
+use std::str::FromStr;
+
+// Hardcoded dev wallet address
+const DEV_WALLET: &str = "6fGPNNm89DGnZdRyuCpvc5zwP9MJteUZD9NfiL8YtpPy";
+const DEV_WALLET_PUBKEY: Pubkey = Pubkey::from_str_const("6fGPNNm89DGnZdRyuCpvc5zwP9MJteUZD9NfiL8YtpPy");
 
 declare_id!("HsLWrDBvv7LT5cjj879Th7HKsPme7MF3XMNYxCMKExsz");
 
@@ -6,12 +11,12 @@ declare_id!("HsLWrDBvv7LT5cjj879Th7HKsPme7MF3XMNYxCMKExsz");
 pub mod rps_staking {
     use super::*;
 
-    pub fn create_game(ctx: Context<CreateGame>, stake_amount: u64, dev_wallet: Pubkey)-> Result<()>{
+    pub fn create_game(ctx: Context<CreateGame>, stake_amount: u64) -> Result<()> {
         let game = &mut ctx.accounts.game;
         game.player1 = ctx.accounts.player1.key();
         game.player2 = Pubkey::default();
         game.stake_amount = stake_amount;
-        game.dev_wallet = dev_wallet;
+        game.dev_wallet = DEV_WALLET_PUBKEY;
         game.is_finished = false;
         game.winner = None;
         game.bump = ctx.bumps.game;
@@ -75,7 +80,8 @@ pub mod rps_staking {
         require!(winner == game.player1 || winner == game.player2, ErrorCode::InvalidWinner);
         // Calculate payouts
         let total = game.stake_amount.checked_mul(2).ok_or(ErrorCode::MathError)?;
-        let winner_amount = total.checked_mul(90).ok_or(ErrorCode::MathError)?.checked_div(100).ok_or(ErrorCode::MathError)?;
+        // Winner gets exactly 0.17 SOL (in lamports), dev gets the rest
+        let winner_amount = 170_000_000u64; // 0.17 SOL (GORB)
         let dev_amount = total.checked_sub(winner_amount).ok_or(ErrorCode::MathError)?;
         // Transfer to winner
         let winner_ix = anchor_lang::solana_program::system_instruction::transfer(

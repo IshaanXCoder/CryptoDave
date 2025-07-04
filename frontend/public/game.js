@@ -134,8 +134,9 @@ class TitleScene extends Phaser.Scene {
     this.add.image(160, 180, 'blacktile');
     this.add.text(160, 120, 'RECREATED BY ARTHUR, CATTANI AND MURILO', { color: '#fff', fontSize: '14px' }).setOrigin(0.5);
     this.add.text(160, 140, 'PROFESSOR LEANDRO K. WIVES', { color: '#fff', fontSize: '12px' }).setOrigin(0.5);
-    this.add.text(160, 170, 'PRESS SPACE TO START SINGLE PLAYER', { color: '#fff', fontSize: '16px' }).setOrigin(0.5);
-    this.add.text(160, 190, 'PRESS M FOR MULTIPLAYER', { color: '#0ff', fontSize: '14px' }).setOrigin(0.5);
+    this.add.text(160, 160, 'RECREATED AGAIN, BY YOURS, @0XIshaanK06 ', { color: '#fff', fontSize: '12px' }).setOrigin(0.5);
+    this.add.image(160, 180, 'blacktile');
+    this.add.text(160,170, 'PRESS M FOR MULTIPLAYER', { color: '#0ff', fontSize: '14px' }).setOrigin(0.5);
     this.add.text(160, 210, 'PRESS ESC TO EXIT', { color: '#fff', fontSize: '12px' }).setOrigin(0.5);
     this.input.keyboard.once('keydown-SPACE', () => {
       this.scene.start('GameScene', { level: 1 });
@@ -165,10 +166,24 @@ class MultiplayerMenuScene extends Phaser.Scene {
   }
 }
 
+// --- Blockchain Integration for Multiplayer ---
+
+// Helper to get blockchain API from window
+function getBlockchain() {
+  return window.blockchain || {};
+}
+
+// Patch CreateRoomScene to use wallet address and stake
 class CreateRoomScene extends Phaser.Scene {
   constructor() { super('CreateRoomScene'); }
-  create() {
-    this.socket = window.io();
+  async create() {
+    this.socket = window.io('http://localhost:3000', {
+      cors: {
+        origin: "http://localhost:3001",
+        methods: ["GET", "POST"]
+      }
+    });
+
     this.add.rectangle(160, 100, 220, 100, 0x111111, 0.9);
     this.add.text(160, 70, 'Creating Room...', { color: '#fff', fontSize: '16px' }).setOrigin(0.5);
     this.add.text(160, 100, 'Enter your name:', { color: '#fff', fontSize: '14px' }).setOrigin(0.5);
@@ -176,17 +191,37 @@ class CreateRoomScene extends Phaser.Scene {
     this.add.text(160, 150, 'Press ENTER to continue', { color: '#aaa', fontSize: '12px' }).setOrigin(0.5);
     this.roomCodeText = this.add.text(160, 40, '', { color: '#0f0', fontSize: '14px' }).setOrigin(0.5);
     this.waitingText = this.add.text(160, 180, '', { color: '#ff0', fontSize: '14px' }).setOrigin(0.5);
+
+    // Use wallet address as username if available
+    let playerAddress = getBlockchain().playerAddress;
+    let defaultName = playerAddress ? getBlockchain().generateUsername(playerAddress) : "";
+    this.nameInput.node.value = defaultName;
+
     this.socket.emit('createRoom', (roomCode) => {
       this.roomCode = roomCode;
       this.roomCodeText.setText(`Room Code: ${roomCode}`);
       this.waitingText.setText('Waiting for another player to join...');
     });
-    this.input.keyboard.on('keydown-ENTER', () => {
+
+    this.input.keyboard.on('keydown-ENTER', async () => {
       const name = this.nameInput.node.value.trim();
+      if (!name) {
+        this.waitingText.setText('Please enter your name.');
+        return;
+      }
       if (name && this.roomCode) {
-        this.socket.emit('playerReady', { x: 0, y: 0, color: '#0ff', name });
+        try {
+          // Stake on chain
+          if (getBlockchain().createGame) {
+            await getBlockchain().createGame();
+          }
+          this.socket.emit('playerReady', { x: 0, y: 0, color: '#0ff', name, address: playerAddress });
+        } catch (e) {
+          this.waitingText.setText('Blockchain error: ' + (e.message || e));
+        }
       }
     });
+
     // Only start game on 'startGame' event
     this.socket.on('startGame', (state) => {
       this.waitingText.setText('');
@@ -195,37 +230,79 @@ class CreateRoomScene extends Phaser.Scene {
   }
 }
 
+// Patch JoinRoomScene to use wallet address and stake
 class JoinRoomScene extends Phaser.Scene {
   constructor() { super('JoinRoomScene'); }
-  create() {
-    this.socket = window.io();
-    this.add.rectangle(160, 100, 220, 110, 0x111111, 0.9);
-    this.add.text(160, 60, 'Join Room', { color: '#fff', fontSize: '16px' }).setOrigin(0.5);
-    this.add.text(160, 90, 'Enter Room Code:', { color: '#fff', fontSize: '14px' }).setOrigin(0.5);
-    this.codeInput = this.add.dom(160, 110, 'input', 'width: 80px; font-size: 14px; text-transform:uppercase;');
-    this.add.text(160, 135, 'Enter your name:', { color: '#fff', fontSize: '14px' }).setOrigin(0.5);
-    this.nameInput = this.add.dom(160, 155, 'input', 'width: 120px; font-size: 14px;');
-    this.add.text(160, 180, 'Press ENTER to continue', { color: '#aaa', fontSize: '12px' }).setOrigin(0.5);
-    this.waitingText = this.add.text(160, 200, '', { color: '#ff0', fontSize: '14px' }).setOrigin(0.5);
-    this.input.keyboard.on('keydown-ENTER', () => {
-      const code = this.codeInput.node.value.trim().toUpperCase();
-      const name = this.nameInput.node.value.trim();
-      if (code && name) {
-        this.socket.emit('joinRoom', code, (ok) => {
-          if (ok) {
-            this.roomCode = code;
-            this.socket.emit('playerReady', { x: 0, y: 0, color: '#0ff', name });
-            this.waitingText.setText('Waiting for host to start the game...');
-          } else {
-            this.add.text(160, 40, 'Invalid Room Code', { color: '#f00', fontSize: '14px' }).setOrigin(0.5);
-          }
-        });
+  async create() {
+    this.socket = window.io('http://localhost:3000', {
+      cors: {
+        origin: "http://localhost:3001",
+        methods: ["GET", "POST"]
       }
     });
-    // Only start game on 'startGame' event
+
+    this.add.rectangle(160, 100, 220, 120, 0x111111, 0.9);
+    this.add.text(160, 60, 'Join Room', { color: '#fff', fontSize: '16px' }).setOrigin(0.5);
+    this.add.text(160, 90, 'Enter Room Code:', { color: '#fff', fontSize: '14px' }).setOrigin(0.5);
+    this.roomInput = this.add.dom(160, 110, 'input', 'width: 120px; font-size: 14px;');
+    this.add.text(160, 130, 'Enter your name:', { color: '#fff', fontSize: '14px' }).setOrigin(0.5);
+    this.nameInput = this.add.dom(160, 150, 'input', 'width: 120px; font-size: 14px;');
+    this.add.text(160, 180, 'Press ENTER to join', { color: '#aaa', fontSize: '12px' }).setOrigin(0.5);
+    this.statusText = this.add.text(160, 210, '', { color: '#ff0', fontSize: '14px' }).setOrigin(0.5);
+
+    // Use wallet address as username if available
+    let playerAddress = getBlockchain().playerAddress;
+    let defaultName = playerAddress ? getBlockchain().generateUsername(playerAddress) : "";
+    this.nameInput.node.value = defaultName;
+
+    this.input.keyboard.on('keydown-ENTER', async () => {
+      const roomCode = this.roomInput.node.value.trim();
+      const name = this.nameInput.node.value.trim();
+      if (!roomCode) {
+        this.statusText.setText('Please enter a room code.');
+        return;
+      }
+      if (!name) {
+        this.statusText.setText('Please enter your name.');
+        return;
+      }
+        try {
+          // Stake on chain (joinGame needs player1 address, which is the room creator)
+          if (getBlockchain().joinGame) {
+            this.socket.emit('getRoomInfo', roomCode, async (info) => {
+              if (info && info.player1Address) {
+                await getBlockchain().joinGame(info.player1Address);
+              this.socket.emit('joinRoom', { roomCode, name, address: playerAddress }, (res) => {
+                if (!res || !res.success) {
+                  this.statusText.setText(res && res.error ? res.error : 'Failed to join room');
+                } else {
+                  // Mark this player as ready after joining
+                  this.socket.emit('playerReady', { x: 0, y: 0, color: '#0ff', name, address: playerAddress });
+                  this.statusText.setText('Waiting for another player to join...');
+                }
+              });
+              } else {
+                this.statusText.setText('Invalid room code or missing player1 address');
+              }
+            });
+          } else {
+          this.socket.emit('joinRoom', { roomCode, name, address: playerAddress }, (res) => {
+            if (!res || !res.success) {
+              this.statusText.setText(res && res.error ? res.error : 'Failed to join room');
+            } else {
+              // Mark this player as ready after joining
+              this.socket.emit('playerReady', { x: 0, y: 0, color: '#0ff', name, address: playerAddress });
+              this.statusText.setText('Waiting for another player to join...');
+            }
+          });
+          }
+        } catch (e) {
+          this.statusText.setText('Blockchain error: ' + (e.message || e));
+      }
+    });
+
     this.socket.on('startGame', (state) => {
-      this.waitingText.setText('');
-      this.scene.start('GameScene', { multiplayer: true, socket: this.socket, roomCode: this.roomCode, name: this.nameInput.node.value.trim(), state });
+      this.scene.start('GameScene', { multiplayer: true, socket: this.socket, roomCode: this.roomInput.node.value.trim(), name: this.nameInput.node.value.trim(), state });
     });
   }
 }
@@ -298,6 +375,7 @@ class GameScene extends Phaser.Scene {
   }
   preload() {
     // Only load static assets here
+    
     this.load.spritesheet('solid', '/assets/tiles/game/solid16x16.png', { frameWidth: 16, frameHeight: 16 });
     this.load.spritesheet('tunnel', '/assets/tiles/game/tunnel16x16.png', { frameWidth: 16, frameHeight: 16 });
     this.load.spritesheet('pinkpipe', '/assets/tiles/game/pinkpipe16x16.png', { frameWidth: 16, frameHeight: 16 });
@@ -587,7 +665,7 @@ class GameScene extends Phaser.Scene {
 
 class FinishScene extends Phaser.Scene {
   constructor() { super('FinishScene'); }
-  create(data) {
+  async create(data) {
     this.cameras.main.setBackgroundColor('#000');
     if (data && data.lost) {
       this.add.text(160, 100, 'YOU LOST', { color: '#f00', fontSize: '32px' }).setOrigin(0.5);
@@ -635,22 +713,38 @@ class FinishScene extends Phaser.Scene {
   }
 }
 
-const config = {
-  type: Phaser.AUTO,
-  width: 320,
-  height: 200,
-  parent: 'game-container',
-  scene: [TitleScene, MultiplayerMenuScene, CreateRoomScene, JoinRoomScene, InterpicScene, WarpScene, GameScene, FinishScene],
-  pixelArt: true,
-  physics: {
-    default: 'arcade',
-    arcade: { gravity: { y: 0 }, debug: false },
-  },
-  dom: {
-    createContainer: true
-  }
-};
+// --- End Blockchain Integration ---
 
-window.onload = () => {
-  new Phaser.Game(config);
+window.onload = function () {
+  const config = {
+    type: Phaser.AUTO,
+    width: VIEWPORT_WIDTH,
+    height: VIEWPORT_HEIGHT,
+    parent: 'game-container',
+    dom: { createContainer: true },
+    physics: {
+      default: 'arcade',
+      arcade: {
+        gravity: { y: 0 },
+        debug: false
+      }
+    },
+    scene: [
+      TitleScene,
+      MultiplayerMenuScene,
+      CreateRoomScene,
+      JoinRoomScene,
+      InterpicScene,
+      WarpScene,
+      GameScene,
+      FinishScene
+    ],
+    backgroundColor: '#000'
+  };
+
+  // Destroy previous game instance if exists
+  if (window.game && typeof window.game.destroy === "function") {
+    window.game.destroy(true);
+  }
+  window.game = new Phaser.Game(config);
 };

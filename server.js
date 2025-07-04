@@ -5,14 +5,19 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  cors: {
+    origin: "http://localhost:3001",
+    methods: ["GET", "POST"]
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 
 // Serve static files from /public
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Room state: { [roomCode]: { players: { [socketId]: playerObj } } }
+// Room state: { [roomCode]: { players: { [socketId]: playerObj }, player1Address: string } }
 let rooms = {};
 
 // Track finish info per room
@@ -22,7 +27,7 @@ function makeRoomCode() {
   return Math.random().toString(36).substr(2, 5).toUpperCase();
 }
 
-function getInitialPlayerState(socketId, color, name) {
+function getInitialPlayerState(socketId, color, name, address) {
   return {
     id: socketId,
     x: 120 + Math.random() * 40,
@@ -32,6 +37,7 @@ function getInitialPlayerState(socketId, color, name) {
     anim: 'idle',
     color,
     name,
+    address, // Add wallet address
     score: 0,
     powerUps: [],
     alive: true,
@@ -42,6 +48,7 @@ function getInitialPlayerState(socketId, color, name) {
 function getInitialRoomState() {
   return {
     players: {},
+    player1Address: null, // Track the first player's address for blockchain
     powerUps: [],
     collectibles: [],
     traps: [],
@@ -62,6 +69,7 @@ io.on('connection', (socket) => {
   let currentRoom = null;
   let color = `hsl(${Math.floor(Math.random()*360)}, 80%, 60%)`;
   let name = null;
+  let playerAddress = null;
 
   socket.on('createRoom', (cb) => {
     let code;
@@ -71,42 +79,30 @@ io.on('connection', (socket) => {
     rooms[code] = getInitialRoomState();
     currentRoom = code;
     socket.join(code);
-    cb(code);
+    if (typeof cb === 'function') cb(code);
   });
 
-  socket.on('joinRoom', (code, cb) => {
-    if (rooms[code]) {
-      currentRoom = code;
-      socket.join(code);
-      cb(true);
-      // Debug log
-      console.log(`[joinRoom] Socket ${socket.id} joined room ${code}`);
-      // After joining, check if all players are ready and at least 2 players are present
-      const room = rooms[code];
-      const readyPlayers = Object.values(room.players).filter(p => p.ready);
-      if (!room.started && readyPlayers.length >= 2 && readyPlayers.length === Object.keys(room.players).length) {
-        room.started = true;
-        const fs = require('fs');
-        const levelPath = path.join(__dirname, 'public', 'assets', 'levels', '1.txt');
-        let levelText = '';
-        try {
-          levelText = fs.readFileSync(levelPath, 'utf8');
-        } catch (e) {
-          levelText = '';
-        }
-        console.log(`[startGame] Emitting to room ${code}`);
-        io.to(code).emit('startGame', {
-          levelNumber: room.levelNumber,
-          score: room.score,
-          players: room.players,
-          powerUps: room.powerUps,
-          collectibles: room.collectibles,
-          traps: room.traps,
-          levelText,
-        });
+  socket.on('joinRoom', (data, cb) => {
+    const { roomCode, name: playerName, address } = data;
+    if (rooms[roomCode]) {
+      currentRoom = roomCode;
+      socket.join(roomCode);
+      name = playerName;
+      playerAddress = address;
+      
+      // Send back success with player1 address for blockchain join
+      if (typeof cb === 'function') {
+      cb({
+        success: true,
+        player1Address: rooms[roomCode].player1Address
+      });
       }
+      
+      console.log(`[joinRoom] Socket ${socket.id} joined room ${roomCode} as ${name} (${address})`);
     } else {
-      cb(false);
+      if (typeof cb === 'function') {
+      cb({ success: false, error: 'Room not found' });
+      }
     }
   });
 
@@ -114,21 +110,32 @@ io.on('connection', (socket) => {
     if (!currentRoom) return;
     name = playerInfo.name || `Player-${socket.id.substr(0, 4)}`;
     color = playerInfo.color || color;
-    let player = getInitialPlayerState(socket.id, color, name);
+    playerAddress = playerInfo.address;
+    
+    let player = getInitialPlayerState(socket.id, color, name, playerAddress);
     player.x = playerInfo.x;
     player.y = playerInfo.y;
     player.color = color;
     player.name = name;
+    player.address = playerAddress;
     player.ready = true;
+    
     rooms[currentRoom].players[socket.id] = player;
+    
+    // Set player1Address if this is the first player
+    if (!rooms[currentRoom].player1Address) {
+      rooms[currentRoom].player1Address = playerAddress;
+      console.log(`[playerReady] Set player1Address to ${playerAddress} for room ${currentRoom}`);
+    }
+    
     broadcastPlayerList(currentRoom);
-    // Debug log
+    
     const readyPlayers = Object.values(rooms[currentRoom].players).filter(p => p.ready);
     console.log(`[playerReady] ${player.name} marked ready in room ${currentRoom}. Ready count: ${readyPlayers.length}/${Object.keys(rooms[currentRoom].players).length}`);
+    
     // Only start the game if at least 2 players are ready
     if (!rooms[currentRoom].started && readyPlayers.length >= 2 && readyPlayers.length === Object.keys(rooms[currentRoom].players).length) {
       rooms[currentRoom].started = true;
-      // Load level text from disk (level 1 for now)
       const fs = require('fs');
       const levelPath = path.join(__dirname, 'public', 'assets', 'levels', '1.txt');
       let levelText = '';
@@ -146,6 +153,7 @@ io.on('connection', (socket) => {
         collectibles: rooms[currentRoom].collectibles,
         traps: rooms[currentRoom].traps,
         levelText,
+        player1Address: rooms[currentRoom].player1Address, // Include for blockchain
       });
     }
   });
@@ -194,14 +202,7 @@ io.on('connection', (socket) => {
 
   socket.on('requestRoomState', () => {
     if (!currentRoom) return;
-    socket.emit('currentState', {
-      players: rooms[currentRoom].players,
-      powerUps: rooms[currentRoom].powerUps,
-      collectibles: rooms[currentRoom].collectibles,
-      traps: rooms[currentRoom].traps,
-      levelNumber: rooms[currentRoom].levelNumber,
-      score: rooms[currentRoom].score,
-    });
+    socket.emit('roomState', rooms[currentRoom]);
   });
 
   socket.on('syncLevel', (data) => {
@@ -276,18 +277,31 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    if (currentRoom && rooms[currentRoom] && rooms[currentRoom].players[socket.id]) {
+    if (currentRoom && rooms[currentRoom]) {
       delete rooms[currentRoom].players[socket.id];
-      broadcastPlayerList(currentRoom);
-      io.to(currentRoom).emit('playerDisconnected', socket.id);
-      // Clean up empty rooms
       if (Object.keys(rooms[currentRoom].players).length === 0) {
         delete rooms[currentRoom];
+        console.log(`[disconnect] Room ${currentRoom} deleted (no players left)`);
+      } else {
+        broadcastPlayerList(currentRoom);
+        console.log(`[disconnect] Player ${socket.id} left room ${currentRoom}`);
+      }
+    }
+  });
+
+  socket.on('getRoomInfo', (roomCode, cb) => {
+    if (rooms[roomCode]) {
+      if (typeof cb === 'function') {
+        cb({ player1Address: rooms[roomCode].player1Address });
+      }
+    } else {
+      if (typeof cb === 'function') {
+        cb({ error: 'Room not found' });
       }
     }
   });
 });
 
 server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });

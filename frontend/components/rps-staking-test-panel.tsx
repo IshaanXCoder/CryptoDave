@@ -4,6 +4,9 @@ import { useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import * as anchor from "@project-serum/anchor";
+import { Input } from "@/components/ui/input";
+import { useBlockchain } from "@/hooks/use-blockchain";
+import React from "react";
 
 const PROGRAM_ID = new PublicKey("HsLWrDBvv7LT5cjj879Th7HKsPme7MF3XMNYxCMKExsz");
 const STAKE_AMOUNT = 100_000_000; // 0.1 GORB (assuming 9 decimals)
@@ -11,11 +14,24 @@ const STAKE_AMOUNT = 100_000_000; // 0.1 GORB (assuming 9 decimals)
 export function RpsStakingTestPanel() {
   const { connection } = useConnection();
   const { publicKey, signTransaction, wallet, sendTransaction } = useWallet();
+  const { generateUsername } = useBlockchain();
   const [devWallet, setDevWallet] = useState("");
   const [player1, setPlayer1] = useState("");
   const [winner, setWinner] = useState("");
   const [txResult, setTxResult] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Username state for create and join
+  const [createUsername, setCreateUsername] = useState("");
+  const [joinUsername, setJoinUsername] = useState("");
+
+  // Set default usernames from wallet address
+  React.useEffect(() => {
+    if (publicKey) {
+      const defaultName = generateUsername(publicKey.toBase58());
+      setCreateUsername((prev) => prev || defaultName);
+      setJoinUsername((prev) => prev || defaultName);
+    }
+  }, [publicKey, generateUsername]);
 
   // Helper: get Anchor provider
   function getProvider() {
@@ -40,6 +56,7 @@ export function RpsStakingTestPanel() {
     setLoading(true); setTxResult(null);
     try {
       if (!publicKey || !devWallet) throw new Error("Connect wallet and enter dev wallet");
+      // Username is createUsername (can be used for off-chain logic/UI)
       const program = getProgram();
       const [gamePda] = getGamePda(publicKey);
       const tx = await program.methods.createGame(new anchor.BN(STAKE_AMOUNT), new PublicKey(devWallet)).accounts({
@@ -59,6 +76,7 @@ export function RpsStakingTestPanel() {
     setLoading(true); setTxResult(null);
     try {
       if (!publicKey || !player1) throw new Error("Connect wallet and enter player1 address");
+      // Username is joinUsername (can be used for off-chain logic/UI)
       const program = getProgram();
       const player1Key = new PublicKey(player1);
       const [gamePda] = getGamePda(player1Key);
@@ -104,17 +122,21 @@ export function RpsStakingTestPanel() {
       <h2 className="text-xl font-bold mb-4 text-white">RPS Staking Contract Test Panel</h2>
       <div className="mb-4">
         <label className="block text-sm text-gray-300 mb-1">Dev Wallet Address (for create/declare):</label>
-        <input type="text" className="w-full p-2 rounded bg-black text-white border border-white/10 mb-2" value={devWallet} onChange={e => setDevWallet(e.target.value)} placeholder="Dev wallet pubkey" />
+        <Input type="text" className="mb-2" value={devWallet} onChange={e => setDevWallet(e.target.value)} placeholder="Dev wallet pubkey" />
+        <label className="block text-sm text-gray-300 mb-1">Your Username (creator):</label>
+        <Input type="text" className="mb-2" value={createUsername} onChange={e => setCreateUsername(e.target.value)} placeholder="Your username (default: wallet)" />
         <button className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded mr-2" onClick={handleCreateGame} disabled={loading}>Create Game</button>
       </div>
       <div className="mb-4">
         <label className="block text-sm text-gray-300 mb-1">Player1 Address (for join/declare):</label>
-        <input type="text" className="w-full p-2 rounded bg-black text-white border border-white/10 mb-2" value={player1} onChange={e => setPlayer1(e.target.value)} placeholder="Player1 pubkey" />
+        <Input type="text" className="mb-2" value={player1} onChange={e => setPlayer1(e.target.value)} placeholder="Player1 pubkey" />
+        <label className="block text-sm text-gray-300 mb-1">Your Username (joiner):</label>
+        <Input type="text" className="mb-2" value={joinUsername} onChange={e => setJoinUsername(e.target.value)} placeholder="Your username (default: wallet)" />
         <button className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded mr-2" onClick={handleJoinGame} disabled={loading}>Join Game</button>
       </div>
       <div className="mb-4">
         <label className="block text-sm text-gray-300 mb-1">Winner Address (for declare):</label>
-        <input type="text" className="w-full p-2 rounded bg-black text-white border border-white/10 mb-2" value={winner} onChange={e => setWinner(e.target.value)} placeholder="Winner pubkey" />
+        <Input type="text" className="mb-2" value={winner} onChange={e => setWinner(e.target.value)} placeholder="Winner pubkey" />
         <button className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded mr-2" onClick={handleDeclareWinner} disabled={loading}>Declare Winner</button>
       </div>
       {txResult && <div className="mt-4 p-2 bg-black text-orange-400 rounded break-all">{txResult}</div>}
