@@ -160,6 +160,7 @@ class MultiplayerMenuScene extends Phaser.Scene {
     this.input.keyboard.once('keydown-G', () => {
       this.scene.start('CreateRoomScene');
     });
+    
     this.input.keyboard.once('keydown-H', () => {
       this.scene.start('JoinRoomScene');
     });
